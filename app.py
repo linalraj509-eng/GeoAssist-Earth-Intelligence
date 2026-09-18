@@ -1,4 +1,3 @@
-import os
 from io import BytesIO
 
 import streamlit as st
@@ -9,7 +8,6 @@ from PIL import Image
 import rasterio
 from rasterio.io import MemoryFile
 
-from openai import OpenAI
 from streamlit_mic_recorder import speech_to_text
 
 
@@ -35,20 +33,10 @@ st.divider()
 
 
 # ============================================================
-# OPENAI
+# LOCAL AI REASONING
 # ============================================================
 
-API_KEY = os.getenv("OPENAI_API_KEY")
-
-if API_KEY:
-    client = OpenAI(api_key=API_KEY)
-    st.success("🤖 AI Engine: Connected")
-else:
-    client = None
-    st.warning(
-        "⚠️ OpenAI API key not detected. "
-        "AI reasoning will use fallback mode."
-    )
+st.success("🟢 AI Engine: Free Local Prototype Mode")
 
 
 # ============================================================
@@ -256,179 +244,38 @@ def resize_array(
 
 
 # ============================================================
+# ============================================================
 # AI QUERY UNDERSTANDING
 # ============================================================
 
 def understand_query(query):
-
-    if client is None:
-
-        return {
-            "intent": "TEMPORAL_CHANGE",
-            "reason": "Fallback temporal-change workflow."
-        }
-
-    prompt = """
-You are the geospatial reasoning engine of GeoAssist Earth Intelligence.
-
-Understand the user's remote-sensing question.
-
-Classify it into exactly ONE category:
-
-TEMPORAL_CHANGE
-SINGLE_IMAGE
-OPTICAL_SAR
-AREA_MEASUREMENT
-GENERAL_GEOSPATIAL
-
-If the user asks what changed between two images,
-choose TEMPORAL_CHANGE.
-
-If the user asks how much area changed,
-choose AREA_MEASUREMENT or TEMPORAL_CHANGE.
-
-Return:
-
-INTENT: <category>
-REASON: <one short sentence>
-"""
-
-    try:
-
-        response = client.responses.create(
-            model="gpt-5.6-luna",
-            instructions=prompt,
-            input=query
-        )
-
-        result = response.output_text.strip()
-
-        if "AREA_MEASUREMENT" in result:
-            intent = "AREA_MEASUREMENT"
-
-        elif "TEMPORAL_CHANGE" in result:
-            intent = "TEMPORAL_CHANGE"
-
-        elif "OPTICAL_SAR" in result:
-            intent = "OPTICAL_SAR"
-
-        elif "SINGLE_IMAGE" in result:
-            intent = "SINGLE_IMAGE"
-
-        else:
-            intent = "GENERAL_GEOSPATIAL"
-
-        return {
-            "intent": intent,
-            "reason": result
-        }
-
-    except Exception as e:
-
-        return {
-            "intent": "TEMPORAL_CHANGE",
-            "reason": f"AI fallback used: {e}"
-        }
+    q = query.lower()
+    if any(w in q for w in ["optical", "sar", "radar", "sentinel-1", "sentinel 1"]):
+        return {"intent":"OPTICAL_SAR", "reason":"Local reasoning detected an optical/SAR cross-modal query."}
+    if any(w in q for w in ["area", "hectare", "hectares", "km2", "km²", "square kilometre", "square kilometer", "how much land", "how much area"]) and any(w in q for w in ["change", "changed", "difference", "affected", "between"]):
+        return {"intent":"AREA_MEASUREMENT", "reason":"Local reasoning detected a change-area measurement request."}
+    if any(w in q for w in ["changed", "change", "difference", "before", "after", "between", "temporal", "earlier", "later"]):
+        return {"intent":"TEMPORAL_CHANGE", "reason":"Local reasoning detected a temporal change-analysis query."}
+    if any(w in q for w in ["single image", "one image", "classify", "classification", "describe this image", "caption"]):
+        return {"intent":"SINGLE_IMAGE", "reason":"Local reasoning detected a single-image analysis query."}
+    return {"intent":"GENERAL_GEOSPATIAL", "reason":"Local reasoning classified this as a general geospatial query."}
 
 
 # ============================================================
 # AI RESULT EXPLANATION
 # ============================================================
 
-def explain_result(
-    query,
-    changed_pixels,
-    changed_percentage,
-    area_available,
-    area_m2,
-    area_ha,
-    area_km2
-):
-
-    if client is None:
-
-        if area_available:
-
-            return (
-                f"GeoAssist detected "
-                f"{changed_percentage:.2f}% pixel-level change "
-                f"covering approximately "
-                f"{area_km2:.4f} km²."
-            )
-
-        return (
-            f"GeoAssist detected "
-            f"{changed_percentage:.2f}% pixel-level change."
-        )
-
+def explain_result(query, changed_pixels, changed_percentage, area_available, area_m2, area_ha, area_km2):
     if area_available:
-
-        measurements = f"""
-Changed pixels: {changed_pixels:,}
-Changed percentage: {changed_percentage:.2f}%
-Changed area: {area_m2:,.2f} m²
-Changed area: {area_ha:.4f} hectares
-Changed area: {area_km2:.4f} km²
-"""
-
-    else:
-
-        measurements = f"""
-Changed pixels: {changed_pixels:,}
-Changed percentage: {changed_percentage:.2f}%
-Real-world area: unavailable
-"""
-
-    prompt = """
-You are the explanation layer of GeoAssist Earth Intelligence.
-
-The measurements below were calculated by a deterministic
-geospatial processing engine.
-
-DO NOT change, invent or estimate any measurement.
-
-Explain the result in 2-4 simple sentences.
-
-If area is available, mention it.
-
-If area is unavailable, explain that georeferenced
-GeoTIFF imagery with appropriate spatial information
-is required.
-
-The current prototype uses pixel-level image difference.
-Do not claim that the result proves flooding,
-deforestation or another specific phenomenon.
-"""
-
-    user_prompt = f"""
-User question:
-{query}
-
-Measured result:
-{measurements}
-
-Explain the result.
-"""
-
-    try:
-
-        response = client.responses.create(
-            model="gpt-5.6-luna",
-            instructions=prompt,
-            input=user_prompt
-        )
-
-        return response.output_text.strip()
-
-    except Exception:
-
-        return (
-            "The geospatial calculation completed, "
-            "but the AI explanation could not be generated."
-        )
+        return (f"GeoAssist detected {changed_percentage:.2f}% pixel-level change, "
+                f"covering approximately {area_km2:.4f} km² ({area_ha:.4f} hectares). "
+                "The measurement is derived from the uploaded georeferenced projected GeoTIFF imagery.")
+    return (f"GeoAssist detected {changed_percentage:.2f}% pixel-level change across {changed_pixels:,} pixels. "
+            "A real-world area cannot be calculated from these inputs because appropriate projected "
+            "georeferencing/resolution is unavailable. This prototype result indicates image-level difference only; "
+            "it does not by itself prove flooding, deforestation, or another specific phenomenon.")
 
 
-# ============================================================
 # CHANGE MAP
 # ============================================================
 
@@ -972,7 +819,7 @@ if analyse:
     trace.extend([
         "✓ Evidence map generated",
         "✓ Result validated",
-        "✓ AI explanation generated"
+        "✓ Local AI explanation generated"
     ])
 
     for item in trace:
@@ -994,7 +841,7 @@ if analyse:
         """
 VOICE / TEXT
      ↓
-OPENAI LLM
+LOCAL AI REASONING
      ↓
 GEOSPATIAL INTENT
      ↓
@@ -1008,7 +855,7 @@ AREA MEASUREMENT
      ↓
 VALIDATION
      ↓
-OPENAI LLM
+LOCAL AI REASONING
      ↓
 EVIDENCE-GROUNDED ANSWER
         """,
